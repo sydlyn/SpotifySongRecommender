@@ -15,21 +15,21 @@ def clean_playlist_dataset():
         return None
 
     # skip bad lines and count how many get skipped
-    clean = pd.read_csv("data/playlists.csv", engine="python", on_bad_lines=bad_count_tracker) 
+    clean = pd.read_csv("../data/playlists.csv", engine="python", on_bad_lines=bad_count_tracker) 
     print(f"{bad_count} lines skipped in the playlist dataset due to bad formatting")
 
     clean.columns = ['user_id', 'artists', 'track_name', 'playlist_name']
-    clean.to_parquet("data/playlists_clean.parquet")
+    clean.to_parquet("../data/playlists_clean.parquet")
 
 def load_data(save_samples=False):
     DB = {
-        "SM": pd.read_csv("data/song_metadata.csv", index_col=0),
-        "PL": pd.read_parquet("data/playlists_clean.parquet"),
+        "SM": pd.read_csv("../data/song_metadata.csv", index_col=0),
+        "PL": pd.read_parquet("../data/playlists_clean.parquet"),
     }
 
     if save_samples:
         for name, df in DB.items():
-            df.head(1000).to_parquet(f"data/{name}.parquet")
+            df.head(1000).to_parquet(f"../data/{name}.parquet")
 
     return DB
 
