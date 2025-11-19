@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from data_cleaning import load_datasets, print_dataset_info
-from collections import defaultdict, Counter
+from collections import Counter, defaultdict
 from gensim.models import Word2Vec
 
 from sklearn.neighbors import NearestNeighbors
@@ -19,17 +19,33 @@ class RandomBaseline:
         self.songs = SM.index.values
         self.random_state = random_state
     
-    def predict(self, _, n=10):
+    def predict(self, _, n=5):
         np.random.seed(self.random_state)
         return np.random.choice(self.songs, n, replace=False)
     
-class PopularBaseline:
-    """Predict the most popular, not-saved song."""
-    
 class RandomMaxGenre:
-    """Predict a random song from the most frequent genre in the playlist."""
+    """Predict random songs from the playlist's most frequent genre."""
+    def __init__(self, SM, random_state=12):
+        self.SM = SM
+        self.random_state = random_state
+        self.genre_to_songs = defaultdict(list)
+
+        for uid, genre_list in zip(SM.index, SM["track_genre"]):
+            for g in genre_list:
+                self.genre_to_songs[g].append(uid)
     
-class KNearestNeighbors:
+    def predict(self, playlist_songs, n=5):
+        genres = []
+        for s in playlist_songs:
+            genres.extend(self.SM.loc[s, "track_genre"])
+
+        most_common = pd.Series(genres).mode()[0]
+        candidates = self.genre_to_songs.get(most_common, [])
+
+        np.random.seed(self.random_state)
+        return list(np.random.choice(candidates, min(n, len(candidates)), replace=False))
+
+class KNNCentroid:
     """Recommend the song closest to the playlist centroid in feature space."""
     def __init__(self, SM, feature_cols):
         self.SM = SM
@@ -37,10 +53,10 @@ class KNearestNeighbors:
         self.song_features = SM[feature_cols].values
         self.song_ids = SM.index.values
         # build kNN index
-        self.knn = NearestNeighbors(n_neighbors=10, metric='euclidean')
+        self.knn = NearestNeighbors(n_neighbors=5, metric='euclidean')
         self.knn.fit(self.song_features)
     
-    def predict(self, playlist_songs, n=10):
+    def predict(self, playlist_songs, n=5):
         # compute centroid
         centroid = self.SM.loc[playlist_songs, self.feature_cols].mean().values.reshape(1, -1)
         # find nearest neighbor to centroid
@@ -50,7 +66,7 @@ class KNearestNeighbors:
         recommended = [s for s in recommended if s not in playlist_songs]
         return recommended[:n]
 
-class PerTrackKNNAggregator:
+class PerTrackKNN:
     """Playlist-aware recommender:
     1. For each playlist track, get k nearest neighbors.
     2. Aggregate neighbors with weighted voting.
@@ -70,7 +86,7 @@ class PerTrackKNNAggregator:
         )
         self.knn.fit(self.song_features)
 
-    def predict(self, playlist_songs, n=10, distance_weight=0.7):
+    def predict(self, playlist_songs, n=5, distance_weight=0.7):
         vote_counter = Counter()
 
         for song in playlist_songs:
@@ -116,7 +132,6 @@ def prepare_playlist_data(DB):
         "speechiness",
         "valence", 
     ]
-
     feature_cols = numeric_cols
 
     # standardize / scale features
@@ -174,7 +189,6 @@ def prepare_playlist_data(DB):
         # each track has a list of genres → Word2Vec sentence
         genre_sentences = []
         for _, row in playlist_agg.iterrows():
-            # get all genres in this playlist
             playlist_genres = []
             for tid in row["track_uids"]:
                 playlist_genres.extend(SM.loc[tid, "track_genre"])
@@ -260,11 +274,10 @@ def evaluate_recommender(recommender, playlist_agg, n_samples=2000, k=5):
     total_hidden = 0
     hits = 0
     reciprocal_ranks = []
-    rank_histogram = defaultdict(int)
 
     for _, row in sampled.iterrows():
         songs = row['track_uids']
-        if len(songs) < 4:
+        if len(songs) < 4 or len(songs) > 300:
             continue
         
         # hide 2 songs
@@ -283,17 +296,16 @@ def evaluate_recommender(recommender, playlist_agg, n_samples=2000, k=5):
             # compute reciprocal rank
             if h in preds:
                 preds = list(preds) 
-                rank = preds.index(h) + 1  # 1-indexed
+                rank = preds.index(h) + 1
                 reciprocal_ranks.append(1 / rank)
-                rank_histogram[min(rank, 50)] += 1
             else:
                 reciprocal_ranks.append(0)
 
-    hit_rate = hits / total_hidden
+    recall = hits / total_hidden
     mrr = np.mean(reciprocal_ranks)
 
     return {
-        "hit_rate@k": hit_rate,
+        "recall@k": recall,
         "MRR": mrr,
     }
 
@@ -306,27 +318,35 @@ def eval_models(DB):
 
     # ~~~ BASELINE MODELS ~~~
     random_baseline = RandomBaseline(SM, random_state=35)
-    nearest_neighbors = KNearestNeighbors(SM, feature_cols)
-    knn_per_track = PerTrackKNNAggregator(SM, feature_cols)
+    random_max_genre = RandomMaxGenre(SM)
+    nearest_neighbors = KNNCentroid(SM, feature_cols)
+    knn_per_track = PerTrackKNN(SM, feature_cols)
 
     # ~~~ EVALUATION ~~~
-    print("Evaluating Random Baseline...")
-    random_hit = evaluate_recommender(random_baseline, playlist_agg, n_samples=10000)
-    print(f"Random Baseline hit rate: {random_hit['hit_rate@k']:.6f}")
+    print("Evaluating RandomBaseline...")
+    random_scores = evaluate_recommender(random_baseline, playlist_agg, n_samples=10000)
+    print(f"RandomBaseline recall: {random_scores['recall@k']:.6f}\n")
 
-    print("Evaluating Nearest Neighbors...")
-    neighbors_hit = evaluate_recommender(nearest_neighbors, playlist_agg)
-    print(f"Nearest Neighbors hit rate: {neighbors_hit['hit_rate@k']:.6f}")
+    print("Evaluating RandomMaxGenre...")
+    random_max_genre_score = evaluate_recommender(random_max_genre, playlist_agg)
+    print(f"RandomMaxGenre recall: {random_max_genre_score['recall@k']:.6f}\n")
 
-    print("Evaluating K Nearest Neighbors per track...")
-    per_track_neighbors_hit = evaluate_recommender(knn_per_track, playlist_agg)
-    print(f"Nearest Neighbors per track hit rate: {per_track_neighbors_hit['hit_rate@k']:.6f}")
+    print("Evaluating KNNCentroid...")
+    knn_centroid_scores = evaluate_recommender(nearest_neighbors, playlist_agg)
+    print(f"KNNCentroid recall: {knn_centroid_scores['recall@k']:.6f}\n")
+
+    print("Evaluating PerTrackKNN...")
+    per_track_knn_scores = evaluate_recommender(knn_per_track, playlist_agg)
+    print(f"PerTrackKNN recall: {per_track_knn_scores['recall@k']:.6f}\n")
 
     return {
-        "RandomBaseline": random_hit,
-        # "NearestNeighbors": neighbors_hit,
-        "PerTrackNearestNeighbors": per_track_neighbors_hit,
+        "RandomBaseline": random_scores,
+        "RandomMaxGenre": random_max_genre_score,
+        "NearestNeighbors": knn_centroid_scores,
+        "PerTracKNN": per_track_knn_scores,
     }
+
+# ~~~ TESTING ~~~ #
 
 def test_custom_playlist(DB, model=RandomBaseline, num_recs=3):
     SM, playlist_agg, feature_cols = prepare_playlist_data(DB)
@@ -344,13 +364,13 @@ def test_custom_playlist(DB, model=RandomBaseline, num_recs=3):
 
     def show(title, recs):
         print(f"\n=== {title} ===")
-        rec_df = SM.loc[recs]
+        rec_df = SM.loc[recs][['track_name', 'artists', 'track_genre', 'popularity']]
         print(rec_df)
 
-    show("My Song Playlist:", my_songs)
+    show("Moody Teen Pop", my_songs)
     show("My song recommendations", nonrap_recs)
 
-    show("My Rap Songs:", my_songs_rap)
+    show("Basic Rap", my_songs_rap)
     show("Rap recommendations", rap_recs)
 
     return nonrap_recs, rap_recs    
@@ -369,17 +389,18 @@ def make_plots():
         "Energy+danceability+speechiness+valence+tempo": 0.020900,
         "Energy+danceability+speechiness+valence+artist_popularity": 0.134512,
         "Energy+danceability+speechiness+valence+popularity": 0.054662,
-        "Random": 0.000109
+        "Filtered Random": 0.0021436,
+        "Pure Random": 0.000109
     }
     feature_results = dict(sorted(feature_results.items(), key=lambda x: x[1], reverse=True))
 
     features = list(feature_results.keys())
-    hit_rates = list(feature_results.values())
+    recalls = list(feature_results.values())
 
     plt.figure(figsize=(10,6))
-    plt.barh(features, hit_rates, color='skyblue')
-    plt.xlabel("Hit Rate @5")
-    plt.title("Hit Rate by Feature Combination")
+    plt.barh(features, recalls, color='skyblue')
+    plt.xlabel("Recall@5")
+    plt.title("Recall@5 by Feature Combination")
     plt.gca().invert_yaxis()  # Best at top
     plt.show()
 
@@ -395,17 +416,18 @@ def make_plots():
         "Track*0.5, Genre*1.2, Artist*2": 0.166667,
         "Track*0, Genre*1.2, Artist*2": 0.117899,
         "Track*0.8, Genre*1.2, Artist*2": 0.168274,
+        "Filtered Random": 0.0021436,
         "Random": 0.000109
     }
     scaling_results = dict(sorted(scaling_results.items(), key=lambda x: x[1], reverse=True))
 
     configs = list(scaling_results.keys())
-    hit_rates2 = list(scaling_results.values())
+    recalls2 = list(scaling_results.values())
 
     plt.figure(figsize=(12,6))
-    plt.barh(configs, hit_rates2, color='lightgreen')
-    plt.xlabel("Hit Rate @5")
-    plt.title("Hit Rate by Track/Genre/Artist Word2Vec Embedding Scaling")
+    plt.barh(configs, recalls2, color='lightgreen')
+    plt.xlabel("Recall@5")
+    plt.title("Recall@5 by Track/Genre/Artist Word2Vec Embedding Scaling")
     plt.gca().invert_yaxis()
     plt.show()
 
@@ -415,14 +437,14 @@ def main():
     DB = load_datasets(fresh=False)
     # print_dataset_info(DB)
 
-    # make_plots()
+    # make_plots() # make plots with data from manual feature testing
 
-    test_custom_playlist(DB, model=PerTrackKNNAggregator, num_recs=10)
+    test_custom_playlist(DB, model=PerTrackKNN, num_recs=10)
 
-    results = eval_models(DB)
-    print("\nModel comparison:")
-    for name, hit in results.items():
-        print(f"{name}: {hit}")
+    # results = eval_models(DB)
+    # print("\nModel comparison:")
+    # for name, scores in results.items():
+    #     print(f"{name}: {scores}")
 
 if __name__ == "__main__":
     main()
