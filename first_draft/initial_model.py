@@ -15,11 +15,12 @@ from sklearn.decomposition import TruncatedSVD
 
 class RandomBaseline:
     """Predict a random song from the entire catalog."""
-    def __init__(self, SM):
+    def __init__(self, SM, random_state=12):
         self.songs = SM.index.values
+        self.random_state = random_state
     
-    def predict(self, _, n=10, random_seed=12):
-        np.random.seed(random_seed)
+    def predict(self, _, n=10):
+        np.random.seed(self.random_state)
         return np.random.choice(self.songs, n, replace=False)
     
 class PopularBaseline:
@@ -114,11 +115,22 @@ def prepare_playlist_data(DB):
 
     # COLS
     numeric_cols = [
-        "danceability", "energy", "loudness", "speechiness",
-        "acousticness", "valence", "tempo", "artist_popularity", "popularity"
+        # "danceability", 
+        # "energy", 
+        # "loudness", 
+        # "speechiness",
+        # "acousticness", 
+        # "valence", 
+        # "tempo", 
+        "artist_popularity", 
+        # "popularity"
     ]
-    genre_cols = [col for col in SM.columns if col.startswith("genre__")]
-    tfidf_cols = [col for col in SM.columns if col.startswith("tfidf_")]
+
+    genre_cols = []
+    # genre_cols = [col for col in SM.columns if col.startswith("genre__")]
+    
+    tfidf_cols = []
+    # tfidf_cols = [col for col in SM.columns if col.startswith("tfidf_")]
 
     feature_cols = numeric_cols + genre_cols + tfidf_cols
 
@@ -147,20 +159,20 @@ def prepare_playlist_data(DB):
 
         w2v_model = Word2Vec(
             sentences,
-            vector_size=32,
-            window=3,
+            vector_size=64,
+            window=5,
             min_count=1,
             workers=1,
             sg=1
         )
 
-        w2v_embeds = np.zeros((len(track_ids), 32))
+        w2v_embeds = np.zeros((len(track_ids), 64))
         for tid in track_ids:
             key = str(tid)
             if key in w2v_model.wv:
                 w2v_embeds[track_id_to_index[tid]] = w2v_model.wv[key]
             else:
-                w2v_embeds[track_id_to_index[tid]] = np.zeros(32)
+                w2v_embeds[track_id_to_index[tid]] = np.zeros(64)
 
         # add W2V to SM
         w2v_cols = [f"w2v_{i}" for i in range(w2v_embeds.shape[1])]
@@ -176,7 +188,7 @@ def prepare_playlist_data(DB):
 
 # ~~~ EVALUATION ~~~ #
 
-def evaluate_recommender(recommender, playlist_agg, n_samples=5000, k=5):
+def evaluate_recommender(recommender, playlist_agg, n_samples=10000, k=5):
     """Evaluate a recommender using multiple metrics and produce a ranking plot."""
 
     sampled = playlist_agg.sample(min(n_samples, len(playlist_agg)), random_state=42)
@@ -193,11 +205,12 @@ def evaluate_recommender(recommender, playlist_agg, n_samples=5000, k=5):
             continue
         
         # hide 2 songs
+        np.random.seed(12)
         hidden = list(np.random.choice(songs, 2, replace=False))
         others = [s for s in songs if s not in hidden]
         total_hidden += len(hidden)
         
-        preds = recommender.predict(others, n=50)  # request large list for metrics
+        preds = recommender.predict(others, n=50)
 
         # loop through each hidden song
         for h in hidden:
@@ -227,25 +240,6 @@ def evaluate_recommender(recommender, playlist_agg, n_samples=5000, k=5):
         "MRR": mrr,
     }
 
-# def evaluate_recommender(recommender, playlist_agg, n_samples=10000):
-#     """Evaluate a recommender by hiding one song per playlist and checking hit rate."""
-#     hits = 0
-#     sampled = playlist_agg.sample(min(n_samples, len(playlist_agg)), random_state=42)
-
-#     for _, row in sampled.iterrows():
-#         songs = row['track_uids']
-#         if len(songs) < 4 or row['playlist_name'] == "Starred":
-#             continue
-#         hidden = np.random.choice(songs, 2)
-#         others = [s for s in songs if s not in hidden]
-#         pred = recommender.predict(others, n=5)
-#         for h in hidden:
-#             if h in pred:
-#                 hits += 1
-
-#     hit_rate = hits / len(sampled)
-#     return hit_rate
-
 # ~~~ WORKFLOW ~~~ #
 
 def run_models(DB):
@@ -254,7 +248,7 @@ def run_models(DB):
     print(f"Total songs: {len(SM)}, Total playlists: {len(playlist_agg)}\n")
 
     # ~~~ BASELINE MODELS ~~~
-    random_baseline = RandomBaseline(SM)
+    random_baseline = RandomBaseline(SM, random_state=35)
     similarity_baseline = SimilarityBaseline(SM, feature_cols)
     nearest_neighbors = KNearestNeighbors(SM, feature_cols)
 
@@ -281,7 +275,7 @@ def run_models(DB):
 
 def main():
     DB = load_datasets(fresh=False)
-    print_dataset_info(DB)
+    # print_dataset_info(DB)
 
     results = run_models(DB)
 
