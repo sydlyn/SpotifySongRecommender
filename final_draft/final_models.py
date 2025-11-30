@@ -10,6 +10,7 @@ from sklearn.neighbors import NearestNeighbors
 from sklearn.preprocessing import MultiLabelBinarizer, StandardScaler
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.decomposition import TruncatedSVD
+from sklearn.ensemble import RandomForestRegressor
 
 # ~~~ RECOMMENDATION MODELS ~~~ #
 
@@ -124,6 +125,7 @@ def prepare_playlist_data(DB, train_test_split=0.9):
     # MERGE
     merged = PL.merge(SM, how='inner', on=['track_name', 'artists'])
     merged.to_parquet("merged.parquet")
+    print("Matched playlist entries to metadata:", len(merged))
 
     # aggregate playlists
     playlist_agg = merged.groupby(['user_id', 'playlist_name']).agg({
@@ -134,6 +136,7 @@ def prepare_playlist_data(DB, train_test_split=0.9):
     n_train = int(len(playlist_agg) * train_test_split)
     train_playlist_agg = playlist_agg.iloc[:n_train].reset_index(drop=True)
     test_playlist_agg = playlist_agg.iloc[n_train:].reset_index(drop=True)
+    print("Total train playlists:", len(train_playlist_agg))
 
     # COLS
     numeric_cols = [
@@ -317,9 +320,9 @@ def evaluate_recommender(recommender, playlist_agg, n_samples=2000, k=5):
 # ~~~ WORKFLOW ~~~ #
 
 def eval_models(DB):
-    SM, playlist_agg, feature_cols = prepare_playlist_data(DB)
+    SM, test_playlist_agg, feature_cols = prepare_playlist_data(DB)
 
-    print(f"Total songs: {len(SM)}, Total playlists: {len(playlist_agg)}\n")
+    print(f"Total songs: {len(SM)}, Total test playlists: {len(test_playlist_agg)}\n")
 
     # ~~~ BASELINE MODELS ~~~
     random_baseline = RandomBaseline(SM, random_state=35)
@@ -329,19 +332,19 @@ def eval_models(DB):
 
     # ~~~ EVALUATION ~~~
     print("Evaluating RandomBaseline...")
-    random_scores = evaluate_recommender(random_baseline, playlist_agg, n_samples=10000)
+    random_scores = evaluate_recommender(random_baseline, test_playlist_agg, n_samples=10000)
     print(f"RandomBaseline recall: {random_scores['recall@k']:.6f}\n")
 
     print("Evaluating RandomMaxGenre...")
-    random_max_genre_score = evaluate_recommender(random_max_genre, playlist_agg)
+    random_max_genre_score = evaluate_recommender(random_max_genre, test_playlist_agg)
     print(f"RandomMaxGenre recall: {random_max_genre_score['recall@k']:.6f}\n")
 
     print("Evaluating KNNCentroid...")
-    knn_centroid_scores = evaluate_recommender(nearest_neighbors, playlist_agg)
+    knn_centroid_scores = evaluate_recommender(nearest_neighbors, test_playlist_agg)
     print(f"KNNCentroid recall: {knn_centroid_scores['recall@k']:.6f}\n")
 
     print("Evaluating PerTrackKNN...")
-    per_track_knn_scores = evaluate_recommender(knn_per_track, playlist_agg)
+    per_track_knn_scores = evaluate_recommender(knn_per_track, test_playlist_agg)
     print(f"PerTrackKNN recall: {per_track_knn_scores['recall@k']:.6f}\n")
 
     return {
@@ -386,7 +389,7 @@ def main():
     DB = load_datasets(fresh=False)
     # print_dataset_info(DB)
 
-    # test_custom_playlist(DB, model=PerTrackKNN, num_recs=10)
+    test_custom_playlist(DB, model=PerTrackKNN, num_recs=10)
 
     results = eval_models(DB)
     print("\nModel comparison:")
