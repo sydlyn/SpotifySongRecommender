@@ -106,3 +106,7 @@ Playlist-derived embeddings provide a much stronger representation of user taste
 I believe that a recall@5 of 0.16 is strong given the scale of the problem. The model selects 5 tracks from a catalog of ~81k songs and successfully retrieves the hidden tracks 16 percent of the time, far outperforming naive approaches (genre recall ≈0.0027). This indicates that the playlist-aware embeddings are capturing meaningful structure in user behavior rather than relying on superficial metadata correlations.
 
 While the current system provides a solid baseline that leverages both playlist co-occurrence patterns and key metadata features, its performance could likely improve with richer and more complete song metadata. Improving the consistency of track identifiers and increasing the proportion of playlist entries that successfully match to metadata would give the model access to far more training signals. A larger matched set could support more similarity estimates and allow the recommender to generate more flexible and nuanced predictions.
+
+---
+
+Presentation slides can be found in the `presentation_slides/` folder or [here](https://docs.google.com/presentation/d/1JpJ1yf-9bq0y1mGodb4lYcQzWG7E4O0VONyYID4onfo/edit?usp=sharing).
